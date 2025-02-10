@@ -65,11 +65,9 @@ async def upload_file(file: UploadFile = File(...)):
     
     try:
         print(f"Processing file: {file.filename}")
-        # Read the file content into memory
         contents = await file.read()
         print(f"File size: {len(contents)} bytes")
         
-        # Create a pandas DataFrame
         try:
             if file.filename.endswith('.csv'):
                 df = pd.read_csv(pd.io.common.BytesIO(contents))
@@ -81,63 +79,100 @@ async def upload_file(file: UploadFile = File(...)):
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Error reading file: {str(e)}")
         
-        # Map the columns to match frontend expectations
-        column_mapping = {
+        # Define all possible columns and their mappings
+        all_possible_columns = {
+            'Transaction ID': 'Transaction ID',
             'Drug Name': 'Product',
+            'Sale Price (USD)': 'Sale Price',
+            'Discount Amount (USD)': 'Discount Amount',
+            'Chargeback Amount (USD)': 'Chargeback Amount',
+            'Rebate Amount (USD)': 'Rebate Amount',
+            'Admin Fees (USD)': 'Admin Fees',
+            'Free Goods Adjustments': 'Free Goods Adjustments',
+            'Units Sold': 'Units Sold',
+            'Exclusion Flag': 'Exclusion Flag',
             'Manufacturer': 'Manufacturer',
             'Sales Year': 'Date',
-            'Customer Category': 'Customer',
-            'Sales Region': 'Transaction Type',
             'Total Sales (USD)': 'Price',
             'Discount Percentage (%)': 'Discount',
-            'Pricing Compliance Status': 'Status',
+            'Customer Category': 'Customer',
+            'Sales Region': 'Transaction Type',
             'Regulatory Price Limit (USD)': 'Regulatory Limit',
-            'Effective Price After Discounts (USD)': 'Effective Price'
+            'Pricing Compliance Status': 'Status',
+            'Number of Free Goods': 'Free Goods',
+            'Volume Tier Discount (USD)': 'Volume Discount',
+            'Competitor Price (USD)': 'Competitor Price',
+            'Profit Margin (%)': 'Profit Margin',
+            'Market Segment': 'Market Segment'
         }
         
-        # Check for required columns with more informative error
-        required_columns = [
-            'Drug Name', 'Manufacturer', 'Sales Year', 'Customer Category',
-            'Sales Region', 'Total Sales (USD)', 'Discount Percentage (%)',
-            'Pricing Compliance Status'
+        # Create a mapping for the columns that exist in the uploaded file
+        column_mapping = {col: all_possible_columns[col] for col in df.columns if col in all_possible_columns}
+        
+        # Minimum required columns for basic functionality
+        minimum_required_columns = [
+            'Drug Name',
+            'Total Sales (USD)',
+            'Discount Percentage (%)'
         ]
         
-        missing_columns = [col for col in required_columns if col not in df.columns]
+        missing_columns = [col for col in minimum_required_columns if col not in df.columns]
         if missing_columns:
             available_columns = df.columns.tolist()
             error_message = (
-                f"Missing required columns: {', '.join(missing_columns)}\n"
+                f"Missing minimum required columns: {', '.join(missing_columns)}\n"
                 f"Available columns in file: {', '.join(available_columns)}"
             )
             raise HTTPException(status_code=400, detail=error_message)
         
-        # Rename columns to match frontend expectations
+        # Rename existing columns to match frontend expectations
         df = df.rename(columns=column_mapping)
         
         # Perform data validation
         validation_summary = {
-            "missing_discounts": len(df[df["Discount"].isna()]),
-            "govt_transactions": len(df[df["Customer"] == "Government"]),
-            "duplicate_transactions": len(df[df.duplicated()])
+            "missing_discounts": len(df[df["Discount"].isna()]) if "Discount" in df.columns else 0,
+            "govt_transactions": len(df[df["Customer"] == "Government"]) if "Customer" in df.columns else 0,
+            "duplicate_transactions": len(df[df.duplicated()]),
+            "total_columns": len(df.columns),
+            "available_columns": df.columns.tolist()
         }
         
         # Process the data to match frontend structure
         processed_data = []
         for _, row in df.iterrows():
             try:
+                # Create a base dictionary with None/0 values for all possible fields
                 processed_row = {
-                    "Date": str(row["Date"]),  # Sales Year
-                    "Product": str(row["Product"]),  # Drug Name
-                    "Customer": str(row["Customer"]),  # Customer Category
-                    "Transaction Type": str(row["Transaction Type"]),  # Sales Region
-                    "Quantity": 1,  # Default quantity since it's not in the dataset
-                    "Price": float(row["Price"]) if pd.notnull(row["Price"]) else 0.0,  # Total Sales
-                    "Discount": str(row["Discount"]) if pd.notnull(row["Discount"]) else "--",  # Discount Percentage
-                    "Status": str(row["Status"]),  # Pricing Compliance Status
-                    "Manufacturer": str(row["Manufacturer"]),
-                    "Regulatory Limit": float(row["Regulatory Limit"]) if pd.notnull(row["Regulatory Limit"]) else 0.0,
-                    "Effective Price": float(row["Effective Price"]) if pd.notnull(row["Effective Price"]) else 0.0
+                    mapped_name: None for mapped_name in all_possible_columns.values()
                 }
+                
+                # Update with actual values from the row
+                for original_col, mapped_col in column_mapping.items():
+                    value = row[mapped_col]
+                    
+                    # Handle different data types
+                    if pd.isna(value):
+                        if mapped_col in ['Price', 'Discount Amount', 'Regulatory Limit', 'Sale Price',
+                                        'Chargeback Amount', 'Rebate Amount', 'Admin Fees', 'Volume Discount',
+                                        'Competitor Price']:
+                            processed_row[mapped_col] = 0.0
+                        elif mapped_col in ['Units Sold', 'Free Goods']:
+                            processed_row[mapped_col] = 0
+                        elif mapped_col in ['Discount', 'Profit Margin']:
+                            processed_row[mapped_col] = "--"
+                        else:
+                            processed_row[mapped_col] = None
+                    else:
+                        # Convert numeric values
+                        if mapped_col in ['Price', 'Discount Amount', 'Regulatory Limit', 'Sale Price',
+                                        'Chargeback Amount', 'Rebate Amount', 'Admin Fees', 'Volume Discount',
+                                        'Competitor Price']:
+                            processed_row[mapped_col] = float(value) if pd.notnull(value) else 0.0
+                        elif mapped_col in ['Units Sold', 'Free Goods']:
+                            processed_row[mapped_col] = int(value) if pd.notnull(value) else 0
+                        else:
+                            processed_row[mapped_col] = str(value)
+                
                 processed_data.append(processed_row)
             except Exception as e:
                 print(f"Error processing row: {row}")

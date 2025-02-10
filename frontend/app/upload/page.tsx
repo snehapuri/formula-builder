@@ -8,20 +8,14 @@ interface ValidationSummary {
   missing_discounts: number;
   govt_transactions: number;
   duplicate_transactions: number;
+  total_columns: number;
+  available_columns: string[];
 }
 
+type ColumnValue = string | number | null;
+
 interface UploadedData {
-  Date: string;  // Sales Year
-  Product: string;  // Drug Name
-  Customer: string;  // Customer Category
-  'Transaction Type': string;  // Sales Region
-  Quantity: number;
-  Price: number;  // Total Sales (USD)
-  Discount: string;  // Discount Percentage (%)
-  Status: string;  // Pricing Compliance Status
-  Manufacturer: string;
-  'Regulatory Limit': number;
-  'Effective Price': number;
+  [key: string]: ColumnValue;
 }
 
 export default function UploadPage() {
@@ -140,23 +134,78 @@ export default function UploadPage() {
 
   // Filter the data based on search criteria
   const filteredData = uploadedData.filter(row => {
-    return (
-      (!filters.product || row.Product.toLowerCase().includes(filters.product.toLowerCase())) &&
-      (!filters.date || row.Date.includes(filters.date)) &&
-      (!filters.transactionType || row['Transaction Type'].toLowerCase().includes(filters.transactionType.toLowerCase())) &&
-      (!filters.customer || row.Customer.toLowerCase().includes(filters.customer.toLowerCase()))
-    );
+    const productMatch = !filters.product || 
+      (typeof row.Product === 'string' && row.Product.toLowerCase().includes(filters.product.toLowerCase()));
+    
+    const dateMatch = !filters.date || 
+      (typeof row.Date === 'string' && row.Date.includes(filters.date));
+    
+    const typeMatch = !filters.transactionType || 
+      (typeof row['Transaction Type'] === 'string' && 
+       row['Transaction Type'].toLowerCase().includes(filters.transactionType.toLowerCase()));
+    
+    const customerMatch = !filters.customer || 
+      (typeof row.Customer === 'string' && row.Customer.toLowerCase().includes(filters.customer.toLowerCase()));
+
+    return productMatch && dateMatch && typeMatch && customerMatch;
   });
 
   // Get unique values for dropdowns
-  const uniqueProducts = Array.from(new Set(uploadedData.map(row => row.Product)));
-  const uniqueTransactionTypes = Array.from(new Set(uploadedData.map(row => row['Transaction Type'])));
+  const getUniqueValues = (field: string): string[] => {
+    const values = new Set<string>();
+    uploadedData.forEach(row => {
+      const value = row[field];
+      if (typeof value === 'string') {
+        values.add(value);
+      }
+    });
+    return Array.from(values);
+  };
 
   // Calculate pagination based on filtered data
   const totalPages = Math.ceil(filteredData.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
   const currentData = filteredData.slice(startIndex, endIndex);
+
+  // Function to get available columns from the data
+  const getAvailableColumns = () => {
+    if (!uploadedData || uploadedData.length === 0) return [];
+    const firstRow = uploadedData[0];
+    return Object.entries(firstRow)
+      .filter(([_, value]) => value !== null) // Only show columns that have data
+      .map(([key, _]) => key);
+  };
+
+  // Function to format cell value based on type
+  const formatCellValue = (value: any, columnName: string) => {
+    if (value === null || value === undefined) return '--';
+    
+    // Format numbers with currency symbol
+    if (columnName.toLowerCase().includes('price') || 
+        columnName.toLowerCase().includes('sales') ||
+        columnName.toLowerCase().includes('amount') ||
+        columnName.toLowerCase().includes('fees')) {
+      return typeof value === 'number' 
+        ? `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : value;
+    }
+    
+    // Format percentages
+    if (columnName.toLowerCase().includes('percentage') ||
+        columnName.toLowerCase().includes('margin')) {
+      return typeof value === 'number' || !isNaN(Number(value))
+        ? `${value}%`
+        : value;
+    }
+    
+    // Format numbers with comma separation
+    if (typeof value === 'number') {
+      return value.toLocaleString();
+    }
+    
+    return value;
+  };
 
   return (
     <div className="p-6 space-y-6">
@@ -238,7 +287,7 @@ export default function UploadPage() {
                   onChange={(e) => setFilters({ ...filters, product: e.target.value })}
                 >
                   <option value="">Select Product</option>
-                  {uniqueProducts.map((product, index) => (
+                  {getUniqueValues('Product').map((product, index) => (
                     <option key={index} value={product}>{product}</option>
                   ))}
                 </select>
@@ -254,7 +303,7 @@ export default function UploadPage() {
                   onChange={(e) => setFilters({ ...filters, transactionType: e.target.value })}
                 >
                   <option value="">Transaction Type</option>
-                  {uniqueTransactionTypes.map((type, index) => (
+                  {getUniqueValues('Transaction Type').map((type, index) => (
                     <option key={index} value={type}>{type}</option>
                   ))}
                 </select>
@@ -274,65 +323,37 @@ export default function UploadPage() {
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                    Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                    Product
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                    Manufacturer
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                    Customer
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                    Transaction Type
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                    Total Sales (USD)
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                    Discount Percentage (%)
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                    Pricing Compliance Status
-                  </th>
+                  {getAvailableColumns().map((column) => (
+                    <th 
+                      key={column}
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider"
+                    >
+                      {column}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                {currentData.map((row, index) => (
-                  <tr key={index}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300">
-                      {row.Date}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300">
-                      {row.Product}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300">
-                      {row.Manufacturer}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300">
-                      {row.Customer}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300">
-                      {row['Transaction Type']}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300">
-                      ${row.Price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300">
-                      {row.Discount === '--' ? '--' : `${row.Discount}%`}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <span className={`px-2 py-1 rounded-full text-xs ${
-                        row.Status === 'Compliant' 
-                          ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'
-                          : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300'
-                      }`}>
-                        {row.Status}
-                      </span>
-                    </td>
+                {currentData.map((row, rowIndex) => (
+                  <tr key={rowIndex}>
+                    {getAvailableColumns().map((column) => (
+                      <td 
+                        key={`${rowIndex}-${column}`}
+                        className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300"
+                      >
+                        {column === 'Status' ? (
+                          <span className={`px-2 py-1 rounded-full text-xs ${
+                            row[column] === 'Compliant' 
+                              ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'
+                              : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300'
+                          }`}>
+                            {row[column]}
+                          </span>
+                        ) : (
+                          formatCellValue(row[column], column)
+                        )}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
