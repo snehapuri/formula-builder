@@ -46,6 +46,20 @@ interface SortState {
   direction: 'asc' | 'desc';
 }
 
+// Add new interface for suggested filters
+interface SuggestedFilter {
+  id: string;
+  name: string;
+  filters: FilterState;
+  activeFilters: string[];
+}
+
+// Add new interface for column state
+interface ColumnState {
+  isHidden: boolean;
+  order: number;
+}
+
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [uploadedData, setUploadedData] = useState<UploadedData[]>([]);
@@ -60,6 +74,15 @@ export default function UploadPage() {
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
   const [sortConfig, setSortConfig] = useState<SortState | null>(null);
   const [showFilterPanel, setShowFilterPanel] = useState(false);
+
+  // Add state for suggested filters
+  const [suggestedFilters, setSuggestedFilters] = useState<SuggestedFilter[]>([]);
+  const [showSaveFilterModal, setShowSaveFilterModal] = useState(false);
+  const [newFilterName, setNewFilterName] = useState('');
+
+  // Add new state for column management
+  const [columnStates, setColumnStates] = useState<{ [key: string]: ColumnState }>({});
+  const [hoveredColumn, setHoveredColumn] = useState<string | null>(null);
 
   // Fetch existing data on component mount
   useEffect(() => {
@@ -429,6 +452,33 @@ export default function UploadPage() {
     }));
   };
 
+  // Function to save current filters as a suggested filter
+  const handleSaveFilter = () => {
+    if (!newFilterName.trim()) return;
+
+    const newSuggestedFilter: SuggestedFilter = {
+      id: Date.now().toString(),
+      name: newFilterName.trim(),
+      filters: { ...filters },
+      activeFilters: [...activeFilters]
+    };
+
+    setSuggestedFilters(prev => [...prev, newSuggestedFilter]);
+    setShowSaveFilterModal(false);
+    setNewFilterName('');
+  };
+
+  // Function to apply a suggested filter
+  const applySuggestedFilter = (suggestedFilter: SuggestedFilter) => {
+    setFilters(suggestedFilter.filters);
+    setActiveFilters(suggestedFilter.activeFilters);
+  };
+
+  // Function to remove a suggested filter
+  const removeSuggestedFilter = (id: string) => {
+    setSuggestedFilters(prev => prev.filter(filter => filter.id !== id));
+  };
+
   // Filter Panel Component
   const FilterPanel = () => {
     const filterConfig = getAvailableFilters();
@@ -673,6 +723,101 @@ export default function UploadPage() {
     );
   };
 
+  // Add SaveFilterModal component
+  const SaveFilterModal = () => {
+    if (!showSaveFilterModal) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-96">
+          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Save Filter Combination</h3>
+          <input
+            type="text"
+            value={newFilterName}
+            onChange={(e) => setNewFilterName(e.target.value)}
+            placeholder="Enter filter name"
+            className="w-full border rounded-md p-2 mb-4 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setShowSaveFilterModal(false)}
+              className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSaveFilter}
+              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Add SuggestedFilters component
+  const SuggestedFilters = () => {
+    if (suggestedFilters.length === 0) return null;
+
+    return (
+      <div className="mb-4">
+        <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Suggested Filters</h4>
+        <div className="flex flex-wrap gap-2">
+          {suggestedFilters.map(filter => (
+            <div
+              key={filter.id}
+              className="group flex items-center gap-2 bg-blue-50 dark:bg-blue-900/30 px-3 py-1.5 rounded-full"
+            >
+              <button
+                onClick={() => applySuggestedFilter(filter)}
+                className="text-sm text-blue-700 dark:text-blue-300 hover:text-blue-900 dark:hover:text-blue-100"
+              >
+                {filter.name}
+              </button>
+              <button
+                onClick={() => removeSuggestedFilter(filter.id)}
+                className="text-blue-700 dark:text-blue-300 hover:text-blue-900 dark:hover:text-blue-100 opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // Function to handle hiding a column
+  const hideColumn = (columnName: string) => {
+    setColumnStates(prev => ({
+      ...prev,
+      [columnName]: {
+        isHidden: true,
+        order: Object.keys(prev).length // Put it at the end
+      }
+    }));
+  };
+
+  // Function to handle showing a column
+  const showColumn = (columnName: string) => {
+    setColumnStates(prev => {
+      const { [columnName]: removed, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  // Function to get sorted columns
+  const getSortedColumns = () => {
+    const columns = getAvailableColumns();
+    const visibleColumns = columns.filter(col => !columnStates[col]?.isHidden);
+    const hiddenColumns = columns.filter(col => columnStates[col]?.isHidden)
+      .sort((a, b) => (columnStates[a].order - columnStates[b].order));
+    
+    return [...visibleColumns, ...hiddenColumns];
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
@@ -746,14 +891,25 @@ export default function UploadPage() {
           <div className="p-4 border-b dark:border-gray-700">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Data Preview</h3>
-              <button
-                onClick={() => setShowFilterPanel(!showFilterPanel)}
-                className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
-              >
-                {showFilterPanel ? 'Hide Filters' : 'Show Filters'}
-              </button>
+              <div className="flex items-center gap-2">
+                {activeFilters.length > 0 && (
+                  <button
+                    onClick={() => setShowSaveFilterModal(true)}
+                    className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors"
+                  >
+                    Save Filter
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowFilterPanel(!showFilterPanel)}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+                >
+                  {showFilterPanel ? 'Hide Filters' : 'Show Filters'}
+                </button>
+              </div>
             </div>
 
+            <SuggestedFilters />
             {showFilterPanel && <FilterPanel />}
           </div>
 
@@ -762,11 +918,14 @@ export default function UploadPage() {
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr>
-                  {getAvailableColumns().map((column) => (
+                  {getSortedColumns().map((column) => (
                     <th 
                       key={column}
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+                      className={`px-6 py-3 text-left text-xs font-medium tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 relative group
+                        ${columnStates[column]?.isHidden ? 'bg-red-50 dark:bg-red-900/30 text-gray-400 dark:text-gray-500' : 'text-gray-500 dark:text-gray-300'}`}
                       onClick={() => handleSort(column)}
+                      onMouseEnter={() => setHoveredColumn(column)}
+                      onMouseLeave={() => setHoveredColumn(null)}
                     >
                       <div className="flex items-center gap-2">
                         {column}
@@ -774,6 +933,22 @@ export default function UploadPage() {
                           <span className="text-gray-400">
                             {sortConfig.direction === 'asc' ? '↑' : '↓'}
                           </span>
+                        )}
+                        
+                        {/* Hide/Show Column Buttons */}
+                        {hoveredColumn === column && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              columnStates[column]?.isHidden ? showColumn(column) : hideColumn(column);
+                            }}
+                            className={`absolute -top-3 right-2 w-6 h-6 rounded-full flex items-center justify-center transition-opacity
+                              ${columnStates[column]?.isHidden ? 
+                                'bg-green-500 hover:bg-green-600 text-white' : 
+                                'bg-red-500 hover:bg-red-600 text-white'}`}
+                          >
+                            {columnStates[column]?.isHidden ? '✓' : '×'}
+                          </button>
                         )}
                       </div>
                     </th>
@@ -783,10 +958,13 @@ export default function UploadPage() {
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {paginatedData.data.map((row, rowIndex) => (
                   <tr key={rowIndex}>
-                    {getAvailableColumns().map((column) => (
+                    {getSortedColumns().map((column) => (
                       <td 
                         key={`${rowIndex}-${column}`}
-                        className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300"
+                        className={`px-6 py-4 whitespace-nowrap text-sm
+                          ${columnStates[column]?.isHidden ? 
+                            'text-gray-400 dark:text-gray-500 bg-red-50 dark:bg-red-900/30' : 
+                            'text-gray-900 dark:text-gray-300'}`}
                       >
                         {column === 'Status' ? (
                           <span className={`px-2 py-1 rounded-full text-xs ${
@@ -832,6 +1010,8 @@ export default function UploadPage() {
         </div>
       )}
 
+      <SaveFilterModal />
+      
       {error && (
         <div className="text-red-500 mt-4">
           {error}
