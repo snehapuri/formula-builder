@@ -18,12 +18,27 @@ interface UploadedData {
   [key: string]: ColumnValue;
 }
 
+interface DateFilterValue {
+  type: 'date';
+  value: string | [string, string];
+  operator?: 'equals' | 'between' | 'quick';
+  quickFilter?: 'last1m' | 'last3m' | 'last6m' | 'last1y' | 'custom';
+}
+
+interface NumberFilterValue {
+  type: 'number';
+  value: number | [number, number];
+  operator?: 'equals' | 'greater' | 'less' | 'between';
+}
+
+interface TextFilterValue {
+  type: 'text' | 'select';
+  value: string;
+  operator?: 'contains' | 'equals';
+}
+
 interface FilterState {
-  [key: string]: {
-    value: string | number | [number, number] | [string, string];
-    type: 'text' | 'number' | 'date' | 'select' | 'range';
-    operator?: 'contains' | 'equals' | 'greater' | 'less' | 'between';
-  };
+  [key: string]: DateFilterValue | NumberFilterValue | TextFilterValue;
 }
 
 interface SortState {
@@ -153,32 +168,32 @@ export default function UploadPage() {
 
         switch (filter.type) {
           case 'text':
+          case 'select':
             return String(value).toLowerCase().includes(String(filter.value).toLowerCase());
           
-          case 'number':
-            if (filter.operator === 'between' && Array.isArray(filter.value)) {
+          case 'number': {
+            const numValue = Number(value);
+            if (Array.isArray(filter.value)) {
               const [min, max] = filter.value;
-              const numValue = Number(value);
               return numValue >= min && numValue <= max;
             }
             if (filter.operator === 'greater') {
-              return Number(value) >= Number(filter.value);
+              return numValue >= filter.value;
             }
             if (filter.operator === 'less') {
-              return Number(value) <= Number(filter.value);
+              return numValue <= filter.value;
             }
-            return Number(value) === Number(filter.value);
+            return numValue === filter.value;
+          }
           
-          case 'date':
-            if (filter.operator === 'between' && Array.isArray(filter.value)) {
+          case 'date': {
+            const dateStr = String(value);
+            if (Array.isArray(filter.value)) {
               const [start, end] = filter.value;
-              const dateStr = String(value);
-              return dateStr >= String(start) && dateStr <= String(end);
+              return dateStr >= start && dateStr <= end;
             }
-            return String(value) === String(filter.value);
-          
-          case 'select':
-            return value === filter.value;
+            return dateStr === filter.value;
+          }
           
           default:
             return true;
@@ -326,13 +341,34 @@ export default function UploadPage() {
 
   // Handle adding a new filter
   const handleAddFilter = (column: string, type: string) => {
+    let newFilter: DateFilterValue | NumberFilterValue | TextFilterValue;
+
+    switch (type) {
+      case 'date':
+        newFilter = {
+          type: 'date',
+          value: '',
+          operator: 'equals'
+        };
+        break;
+      case 'number':
+        newFilter = {
+          type: 'number',
+          value: 0,
+          operator: 'equals'
+        };
+        break;
+      default:
+        newFilter = {
+          type: type as 'text' | 'select',
+          value: '',
+          operator: 'contains'
+        };
+    }
+
     setFilters(prev => ({
       ...prev,
-      [column]: {
-        value: type === 'range' ? [0, 100] : '',
-        type: type as 'text' | 'number' | 'date' | 'select' | 'range',
-        operator: type === 'number' ? 'equals' : undefined
-      }
+      [column]: newFilter
     }));
     setActiveFilters(prev => [...prev, column]);
   };
@@ -353,9 +389,79 @@ export default function UploadPage() {
     }));
   };
 
+  // Function to get date from months ago
+  const getDateMonthsAgo = (months: number): string => {
+    const date = new Date();
+    date.setMonth(date.getMonth() - months);
+    return date.toISOString().split('T')[0];
+  };
+
+  // Function to apply quick date filter
+  const applyQuickDateFilter = (column: string, quickFilter: string) => {
+    const today = new Date().toISOString().split('T')[0];
+    let startDate = today;
+
+    switch (quickFilter) {
+      case 'last1m':
+        startDate = getDateMonthsAgo(1);
+        break;
+      case 'last3m':
+        startDate = getDateMonthsAgo(3);
+        break;
+      case 'last6m':
+        startDate = getDateMonthsAgo(6);
+        break;
+      case 'last1y':
+        startDate = getDateMonthsAgo(12);
+        break;
+    }
+
+    const dateFilter: DateFilterValue = {
+      type: 'date',
+      value: [startDate, today],
+      operator: 'between',
+      quickFilter: quickFilter as 'last1m' | 'last3m' | 'last6m' | 'last1y' | 'custom'
+    };
+
+    setFilters(prev => ({
+      ...prev,
+      [column]: dateFilter
+    }));
+  };
+
   // Filter Panel Component
   const FilterPanel = () => {
     const filterConfig = getAvailableFilters();
+
+    const handleDateFilterChange = (column: string, filter: DateFilterValue, newValue: string | [string, string]) => {
+      setFilters(prev => ({
+        ...prev,
+        [column]: {
+          ...filter,
+          value: newValue
+        }
+      }));
+    };
+
+    const handleNumberFilterChange = (column: string, filter: NumberFilterValue, newValue: number | [number, number]) => {
+      setFilters(prev => ({
+        ...prev,
+        [column]: {
+          ...filter,
+          value: newValue
+        }
+      }));
+    };
+
+    const handleTextFilterChange = (column: string, filter: TextFilterValue, newValue: string) => {
+      setFilters(prev => ({
+        ...prev,
+        [column]: {
+          ...filter,
+          value: newValue
+        }
+      }));
+    };
 
     return (
       <div className="mb-4 p-4 bg-white dark:bg-gray-800 rounded-lg shadow">
@@ -418,14 +524,11 @@ export default function UploadPage() {
               <div key={column} className="flex items-center gap-2">
                 <span className="text-sm text-gray-700 dark:text-gray-300 w-1/4">{column}</span>
                 
-                {config.type === 'number' && (
+                {filter.type === 'number' && (
                   <>
                     <select
                       value={filter.operator}
-                      onChange={(e) => setFilters(prev => ({
-                        ...prev,
-                        [column]: { ...filter, operator: e.target.value as any }
-                      }))}
+                      onChange={(e) => handleNumberFilterChange(column, filter, Number(e.target.value) as number)}
                       className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                     >
                       <option value="equals">=</option>
@@ -439,26 +542,14 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={(filter.value as [number, number])[0]}
-                          onChange={(e) => setFilters(prev => ({
-                            ...prev,
-                            [column]: { 
-                              ...filter, 
-                              value: [Number(e.target.value), (filter.value as [number, number])[1]]
-                            }
-                          }))}
+                          onChange={(e) => handleNumberFilterChange(column, filter, [Number(e.target.value), (filter.value as [number, number])[1]] as [number, number])}
                           className="border rounded-md p-2 w-24 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                         />
                         <span className="text-gray-700 dark:text-gray-300">to</span>
                         <input
                           type="number"
                           value={(filter.value as [number, number])[1]}
-                          onChange={(e) => setFilters(prev => ({
-                            ...prev,
-                            [column]: { 
-                              ...filter, 
-                              value: [(filter.value as [number, number])[0], Number(e.target.value)]
-                            }
-                          }))}
+                          onChange={(e) => handleNumberFilterChange(column, filter, [(filter.value as [number, number])[0], Number(e.target.value)] as [number, number])}
                           className="border rounded-md p-2 w-24 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                         />
                       </div>
@@ -466,37 +557,94 @@ export default function UploadPage() {
                       <input
                         type="number"
                         value={filter.value as number}
-                        onChange={(e) => setFilters(prev => ({
-                          ...prev,
-                          [column]: { ...filter, value: Number(e.target.value) }
-                        }))}
+                        onChange={(e) => handleNumberFilterChange(column, filter, Number(e.target.value) as number)}
                         className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                       />
                     )}
                   </>
                 )}
 
-                {config.type === 'date' && (
-                  <div className="flex gap-2">
-                    <input
-                      type="date"
-                      value={Array.isArray(filter.value) ? filter.value[0] : filter.value}
-                      onChange={(e) => setFilters(prev => ({
-                        ...prev,
-                        [column]: { ...filter, value: e.target.value }
-                      }))}
-                      className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    />
+                {filter.type === 'date' && (
+                  <div className="flex flex-col gap-2 w-full">
+                    <div className="flex gap-2">
+                      <select
+                        value={filter.operator}
+                        onChange={(e) => {
+                          const newOperator = e.target.value as 'equals' | 'between' | 'quick';
+                          const newFilter: DateFilterValue = {
+                            ...filter,
+                            operator: newOperator,
+                            value: newOperator === 'between' ? ['', ''] : '',
+                            quickFilter: undefined
+                          };
+                          setFilters(prev => ({
+                            ...prev,
+                            [column]: newFilter
+                          }));
+                        }}
+                        className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                      >
+                        <option value="equals">Exact Date</option>
+                        <option value="between">Date Range</option>
+                        <option value="quick">Quick Filter</option>
+                      </select>
+
+                      {filter.operator === 'quick' && (
+                        <select
+                          value={filter.quickFilter}
+                          onChange={(e) => applyQuickDateFilter(column, e.target.value)}
+                          className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        >
+                          <option value="">Select Range</option>
+                          <option value="last1m">Last Month</option>
+                          <option value="last3m">Last 3 Months</option>
+                          <option value="last6m">Last 6 Months</option>
+                          <option value="last1y">Last Year</option>
+                          <option value="custom">Custom Range</option>
+                        </select>
+                      )}
+                    </div>
+
+                    {filter.operator === 'equals' && (
+                      <input
+                        type="date"
+                        value={filter.value as string}
+                        onChange={(e) => handleDateFilterChange(column, filter, e.target.value)}
+                        className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                      />
+                    )}
+
+                    {(filter.operator === 'between' || 
+                      (filter.operator === 'quick' && filter.quickFilter === 'custom')) && (
+                      <div className="flex gap-2 items-center">
+                        <input
+                          type="date"
+                          value={Array.isArray(filter.value) ? filter.value[0] : ''}
+                          onChange={(e) => {
+                            const currentValue = Array.isArray(filter.value) ? filter.value : ['', ''];
+                            handleDateFilterChange(column, filter, [e.target.value, currentValue[1]]);
+                          }}
+                          className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        />
+                        <span className="text-gray-700 dark:text-gray-300">to</span>
+                        <input
+                          type="date"
+                          value={Array.isArray(filter.value) ? filter.value[1] : ''}
+                          onChange={(e) => {
+                            const currentValue = Array.isArray(filter.value) ? filter.value : ['', ''];
+                            handleDateFilterChange(column, filter, [currentValue[0], e.target.value]);
+                          }}
+                          className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {config.type === 'select' && (
                   <select
                     value={filter.value as string}
-                    onChange={(e) => setFilters(prev => ({
-                      ...prev,
-                      [column]: { ...filter, value: e.target.value }
-                    }))}
+                    onChange={(e) => handleTextFilterChange(column, filter as TextFilterValue, e.target.value)}
                     className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                   >
                     <option value="">All</option>
@@ -512,10 +660,7 @@ export default function UploadPage() {
                   <input
                     type="text"
                     value={filter.value as string}
-                    onChange={(e) => setFilters(prev => ({
-                      ...prev,
-                      [column]: { ...filter, value: e.target.value }
-                    }))}
+                    onChange={(e) => handleTextFilterChange(column, filter as TextFilterValue, e.target.value)}
                     placeholder={`Search ${column}...`}
                     className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                   />
