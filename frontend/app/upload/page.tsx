@@ -18,6 +18,19 @@ interface UploadedData {
   [key: string]: ColumnValue;
 }
 
+interface FilterState {
+  [key: string]: {
+    value: string | number | [number, number] | [string, string];
+    type: 'text' | 'number' | 'date' | 'select' | 'range';
+    operator?: 'contains' | 'equals' | 'greater' | 'less' | 'between';
+  };
+}
+
+interface SortState {
+  column: string;
+  direction: 'asc' | 'desc';
+}
+
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [uploadedData, setUploadedData] = useState<UploadedData[]>([]);
@@ -28,12 +41,10 @@ export default function UploadPage() {
   const itemsPerPage = 20;
 
   // Add state for filters
-  const [filters, setFilters] = useState({
-    product: '',
-    date: '',
-    transactionType: '',
-    customer: ''
-  });
+  const [filters, setFilters] = useState<FilterState>({});
+  const [activeFilters, setActiveFilters] = useState<string[]>([]);
+  const [sortConfig, setSortConfig] = useState<SortState | null>(null);
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
 
   // Fetch existing data on component mount
   useEffect(() => {
@@ -132,23 +143,93 @@ export default function UploadPage() {
     document.body.removeChild(a);
   };
 
-  // Filter the data based on search criteria
-  const filteredData = uploadedData.filter(row => {
-    const productMatch = !filters.product || 
-      (typeof row.Product === 'string' && row.Product.toLowerCase().includes(filters.product.toLowerCase()));
-    
-    const dateMatch = !filters.date || 
-      (typeof row.Date === 'string' && row.Date.includes(filters.date));
-    
-    const typeMatch = !filters.transactionType || 
-      (typeof row['Transaction Type'] === 'string' && 
-       row['Transaction Type'].toLowerCase().includes(filters.transactionType.toLowerCase()));
-    
-    const customerMatch = !filters.customer || 
-      (typeof row.Customer === 'string' && row.Customer.toLowerCase().includes(filters.customer.toLowerCase()));
+  // Apply filters to data
+  const applyFilters = (data: UploadedData[]) => {
+    return data.filter(row => {
+      return Object.entries(filters).every(([column, filter]) => {
+        const value = row[column];
+        
+        if (value === null) return false;
 
-    return productMatch && dateMatch && typeMatch && customerMatch;
-  });
+        switch (filter.type) {
+          case 'text':
+            return String(value).toLowerCase().includes(String(filter.value).toLowerCase());
+          
+          case 'number':
+            if (filter.operator === 'between' && Array.isArray(filter.value)) {
+              const [min, max] = filter.value;
+              const numValue = Number(value);
+              return numValue >= min && numValue <= max;
+            }
+            if (filter.operator === 'greater') {
+              return Number(value) >= Number(filter.value);
+            }
+            if (filter.operator === 'less') {
+              return Number(value) <= Number(filter.value);
+            }
+            return Number(value) === Number(filter.value);
+          
+          case 'date':
+            if (filter.operator === 'between' && Array.isArray(filter.value)) {
+              const [start, end] = filter.value;
+              const dateStr = String(value);
+              return dateStr >= String(start) && dateStr <= String(end);
+            }
+            return String(value) === String(filter.value);
+          
+          case 'select':
+            return value === filter.value;
+          
+          default:
+            return true;
+        }
+      });
+    });
+  };
+
+  // Apply sorting to data
+  const applySorting = (data: UploadedData[]) => {
+    if (!sortConfig) return data;
+
+    return [...data].sort((a, b) => {
+      const aVal = a[sortConfig.column];
+      const bVal = b[sortConfig.column];
+
+      if (aVal === null) return sortConfig.direction === 'asc' ? 1 : -1;
+      if (bVal === null) return sortConfig.direction === 'asc' ? -1 : 1;
+
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+      }
+
+      const aStr = String(aVal);
+      const bStr = String(bVal);
+      return sortConfig.direction === 'asc' ? 
+        aStr.localeCompare(bStr) : 
+        bStr.localeCompare(aStr);
+    });
+  };
+
+  // Process data with filters and sorting
+  const processData = () => {
+    let processed = [...uploadedData];
+    processed = applyFilters(processed);
+    processed = applySorting(processed);
+    return processed;
+  };
+
+  // Get filtered and sorted data
+  const paginatedData = (() => {
+    const processed = processData();
+    const totalPages = Math.ceil(processed.length / itemsPerPage);
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return {
+      data: processed.slice(startIndex, endIndex),
+      totalPages,
+      totalItems: processed.length
+    };
+  })();
 
   // Get unique values for dropdowns
   const getUniqueValues = (field: string): string[] => {
@@ -161,12 +242,6 @@ export default function UploadPage() {
     });
     return Array.from(values);
   };
-
-  // Calculate pagination based on filtered data
-  const totalPages = Math.ceil(filteredData.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const endIndex = startIndex + itemsPerPage;
-  const currentData = filteredData.slice(startIndex, endIndex);
 
   // Function to get available columns from the data
   const getAvailableColumns = () => {
@@ -205,6 +280,252 @@ export default function UploadPage() {
     }
     
     return value;
+  };
+
+  // Determine column types and available filters
+  const getColumnType = (columnName: string, values: ColumnValue[]): 'text' | 'number' | 'date' | 'select' => {
+    if (columnName.toLowerCase().includes('date') || columnName.toLowerCase().includes('year')) {
+      return 'date';
+    }
+    
+    if (columnName.toLowerCase().includes('price') || 
+        columnName.toLowerCase().includes('amount') || 
+        columnName.toLowerCase().includes('sales') ||
+        columnName.toLowerCase().includes('limit')) {
+      return 'number';
+    }
+
+    // If the column has less than 10 unique values, make it a select
+    const uniqueValues = new Set(values.filter(v => v !== null));
+    if (uniqueValues.size < 10) {
+      return 'select';
+    }
+
+    return 'text';
+  };
+
+  // Get available filters for each column
+  const getAvailableFilters = () => {
+    if (!uploadedData || uploadedData.length === 0) return {};
+
+    const columns = getAvailableColumns();
+    const filterConfig: { [key: string]: { type: string; values?: any[] } } = {};
+
+    columns.forEach(column => {
+      const values = uploadedData.map(row => row[column]);
+      const type = getColumnType(column, values);
+
+      filterConfig[column] = {
+        type,
+        values: type === 'select' ? Array.from(new Set(values.filter(v => v !== null))) : undefined
+      };
+    });
+
+    return filterConfig;
+  };
+
+  // Handle adding a new filter
+  const handleAddFilter = (column: string, type: string) => {
+    setFilters(prev => ({
+      ...prev,
+      [column]: {
+        value: type === 'range' ? [0, 100] : '',
+        type: type as 'text' | 'number' | 'date' | 'select' | 'range',
+        operator: type === 'number' ? 'equals' : undefined
+      }
+    }));
+    setActiveFilters(prev => [...prev, column]);
+  };
+
+  // Handle removing a filter
+  const handleRemoveFilter = (column: string) => {
+    const newFilters = { ...filters };
+    delete newFilters[column];
+    setFilters(newFilters);
+    setActiveFilters(prev => prev.filter(f => f !== column));
+  };
+
+  // Handle sorting
+  const handleSort = (column: string) => {
+    setSortConfig(prev => ({
+      column,
+      direction: prev?.column === column && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  // Filter Panel Component
+  const FilterPanel = () => {
+    const filterConfig = getAvailableFilters();
+
+    return (
+      <div className="mb-4 p-4 bg-white dark:bg-gray-800 rounded-lg shadow">
+        <div className="flex justify-between items-center mb-4">
+          <h4 className="text-lg font-medium text-gray-900 dark:text-white">Filters</h4>
+          <button
+            onClick={() => setShowFilterPanel(false)}
+            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          {/* Active Filters */}
+          <div className="flex flex-wrap gap-2">
+            {activeFilters.map(column => (
+              <div key={column} className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/30 p-2 rounded">
+                <span className="text-sm text-blue-700 dark:text-blue-300">{column}</span>
+                <button
+                  onClick={() => handleRemoveFilter(column)}
+                  className="text-blue-700 dark:text-blue-300 hover:text-blue-900 dark:hover:text-blue-100"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Add Filter Dropdown */}
+          <div className="flex gap-2">
+            <select
+              className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              onChange={(e) => {
+                if (e.target.value) {
+                  const [column, type] = e.target.value.split('|');
+                  handleAddFilter(column, type);
+                  e.target.value = '';
+                }
+              }}
+            >
+              <option value="">Add Filter...</option>
+              {Object.entries(filterConfig)
+                .filter(([column]) => !activeFilters.includes(column))
+                .map(([column, config]) => (
+                  <option key={column} value={`${column}|${config.type}`}>
+                    {column}
+                  </option>
+                ))
+              }
+            </select>
+          </div>
+
+          {/* Filter Controls */}
+          {activeFilters.map(column => {
+            const filter = filters[column];
+            const config = filterConfig[column];
+
+            return (
+              <div key={column} className="flex items-center gap-2">
+                <span className="text-sm text-gray-700 dark:text-gray-300 w-1/4">{column}</span>
+                
+                {config.type === 'number' && (
+                  <>
+                    <select
+                      value={filter.operator}
+                      onChange={(e) => setFilters(prev => ({
+                        ...prev,
+                        [column]: { ...filter, operator: e.target.value as any }
+                      }))}
+                      className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    >
+                      <option value="equals">=</option>
+                      <option value="greater">≥</option>
+                      <option value="less">≤</option>
+                      <option value="between">Between</option>
+                    </select>
+                    
+                    {filter.operator === 'between' ? (
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={(filter.value as [number, number])[0]}
+                          onChange={(e) => setFilters(prev => ({
+                            ...prev,
+                            [column]: { 
+                              ...filter, 
+                              value: [Number(e.target.value), (filter.value as [number, number])[1]]
+                            }
+                          }))}
+                          className="border rounded-md p-2 w-24 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        />
+                        <span className="text-gray-700 dark:text-gray-300">to</span>
+                        <input
+                          type="number"
+                          value={(filter.value as [number, number])[1]}
+                          onChange={(e) => setFilters(prev => ({
+                            ...prev,
+                            [column]: { 
+                              ...filter, 
+                              value: [(filter.value as [number, number])[0], Number(e.target.value)]
+                            }
+                          }))}
+                          className="border rounded-md p-2 w-24 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        />
+                      </div>
+                    ) : (
+                      <input
+                        type="number"
+                        value={filter.value as number}
+                        onChange={(e) => setFilters(prev => ({
+                          ...prev,
+                          [column]: { ...filter, value: Number(e.target.value) }
+                        }))}
+                        className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                      />
+                    )}
+                  </>
+                )}
+
+                {config.type === 'date' && (
+                  <div className="flex gap-2">
+                    <input
+                      type="date"
+                      value={Array.isArray(filter.value) ? filter.value[0] : filter.value}
+                      onChange={(e) => setFilters(prev => ({
+                        ...prev,
+                        [column]: { ...filter, value: e.target.value }
+                      }))}
+                      className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    />
+                  </div>
+                )}
+
+                {config.type === 'select' && (
+                  <select
+                    value={filter.value as string}
+                    onChange={(e) => setFilters(prev => ({
+                      ...prev,
+                      [column]: { ...filter, value: e.target.value }
+                    }))}
+                    className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                  >
+                    <option value="">All</option>
+                    {config.values?.map(value => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {config.type === 'text' && (
+                  <input
+                    type="text"
+                    value={filter.value as string}
+                    onChange={(e) => setFilters(prev => ({
+                      ...prev,
+                      [column]: { ...filter, value: e.target.value }
+                    }))}
+                    placeholder={`Search ${column}...`}
+                    className="border rounded-md p-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -278,44 +599,17 @@ export default function UploadPage() {
       {uploadedData.length > 0 && (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
           <div className="p-4 border-b dark:border-gray-700">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Data Preview</h3>
-              <div className="flex items-center space-x-4">
-                <select 
-                  className="border rounded-md p-1 dark:bg-gray-700 dark:border-gray-600"
-                  value={filters.product}
-                  onChange={(e) => setFilters({ ...filters, product: e.target.value })}
-                >
-                  <option value="">Select Product</option>
-                  {getUniqueValues('Product').map((product, index) => (
-                    <option key={index} value={product}>{product}</option>
-                  ))}
-                </select>
-                <input
-                  type="date"
-                  className="border rounded-md p-1 dark:bg-gray-700 dark:border-gray-600"
-                  value={filters.date}
-                  onChange={(e) => setFilters({ ...filters, date: e.target.value })}
-                />
-                <select 
-                  className="border rounded-md p-1 dark:bg-gray-700 dark:border-gray-600"
-                  value={filters.transactionType}
-                  onChange={(e) => setFilters({ ...filters, transactionType: e.target.value })}
-                >
-                  <option value="">Transaction Type</option>
-                  {getUniqueValues('Transaction Type').map((type, index) => (
-                    <option key={index} value={type}>{type}</option>
-                  ))}
-                </select>
-                <input
-                  type="text"
-                  placeholder="Search Customer"
-                  className="border rounded-md p-1 dark:bg-gray-700 dark:border-gray-600"
-                  value={filters.customer}
-                  onChange={(e) => setFilters({ ...filters, customer: e.target.value })}
-                />
-              </div>
+              <button
+                onClick={() => setShowFilterPanel(!showFilterPanel)}
+                className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+              >
+                {showFilterPanel ? 'Hide Filters' : 'Show Filters'}
+              </button>
             </div>
+
+            {showFilterPanel && <FilterPanel />}
           </div>
 
           {/* Data Table */}
@@ -326,15 +620,23 @@ export default function UploadPage() {
                   {getAvailableColumns().map((column) => (
                     <th 
                       key={column}
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider"
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+                      onClick={() => handleSort(column)}
                     >
-                      {column}
+                      <div className="flex items-center gap-2">
+                        {column}
+                        {sortConfig?.column === column && (
+                          <span className="text-gray-400">
+                            {sortConfig.direction === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                {currentData.map((row, rowIndex) => (
+                {paginatedData.data.map((row, rowIndex) => (
                   <tr key={rowIndex}>
                     {getAvailableColumns().map((column) => (
                       <td 
@@ -361,7 +663,7 @@ export default function UploadPage() {
           </div>
 
           {/* Pagination */}
-          {totalPages > 1 && (
+          {paginatedData.totalPages > 1 && (
             <div className="px-6 py-4 flex items-center justify-between border-t dark:border-gray-700">
               <button
                 onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
@@ -371,11 +673,11 @@ export default function UploadPage() {
                 Previous
               </button>
               <span className="text-sm text-gray-700 dark:text-gray-300">
-                Page {currentPage} of {totalPages}
+                Page {currentPage} of {paginatedData.totalPages}
               </span>
               <button
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, paginatedData.totalPages))}
+                disabled={currentPage === paginatedData.totalPages}
                 className="px-3 py-1 border rounded-md disabled:opacity-50"
               >
                 Next
